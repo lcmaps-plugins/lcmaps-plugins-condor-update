@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <linux/fcntl.h>
 
 #include "lcmaps/lcmaps_modules.h"
@@ -70,7 +71,6 @@ int update_starter_child(const char * attr, const char *val, int fd) {
 condor_update_fail_child:
   len = snprintf(result_buf, TIME_BUFFER_SIZE, "%d", result);
   write(fd, result_buf, len);
-  flush(fd);
   if (environ_tmp)
     free(environ_tmp); // Considering the next line, this might be the most useless free ever.
   _exit(result);
@@ -80,6 +80,7 @@ int update_starter(const char * attr, const char * val) {
   int fork_pid;
   int fd_flags;
   int rc, exit_code;
+  int status;
   int p2c[2];
   FILE * fh;
 
@@ -127,9 +128,20 @@ int update_starter(const char * attr, const char * val) {
   close(p2c[0]);
 
   if (rc != 1) {
-    // exec succeeded!
-    lcmaps_log(2, "%s: ClassAd update %s=%s successful\n", logstr, attr, val);
-    return 0;
+    // exec succeeded!  Let's check the exit status
+    waitpid(fork_pid, &status, 0);
+    if (WIFEXITED(status)) {
+      if (!(exit_code = WEXITSTATUS(status))) {
+        lcmaps_log(2, "%s: ClassAd update %s=%s successful\n", logstr, attr, val);
+        return 0;
+      } else {
+        lcmaps_log(0, "%s: ClassAd update %s=%s failed.\n", logstr, attr, val);
+        return 1;
+      }
+    } else {
+      lcmaps_log(0, "%s: Unrecognized condor_chirp status: %d\n", logstr, status);
+      return 1;
+    }
   } else {
     lcmaps_log(0, "%s: Update of %s returned error before exec: %d\n", logstr, attr, exit_code);
     return 1;
