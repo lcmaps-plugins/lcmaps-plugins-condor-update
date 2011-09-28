@@ -14,7 +14,9 @@ plugin_LTLIBRARIES = \
         liblcmaps_condor_update.la
 
 liblcmaps_condor_update_la_SOURCES = \
-	src/lcmaps_condor_update.c
+	src/lcmaps_condor_update.c \
+	src/condor_discovery.cxx \
+	src/condor_discovery.h
 
 liblcmaps_condor_update_la_LDFLAGS = -avoid-version
 

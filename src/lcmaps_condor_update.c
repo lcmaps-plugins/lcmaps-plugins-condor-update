@@ -17,16 +17,19 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <linux/limits.h>
 
 #include "lcmaps/lcmaps_modules.h"
 #include "lcmaps/lcmaps_cred_data.h"
 #include "lcmaps/lcmaps_arguments.h"
 
+#include "condor_discovery.h"
+
 #define CONDOR_CHIRP_PATH "/usr/libexec/condor/condor_chirp"
 #define CONDOR_CHIRP_NAME "condor_chirp"
 #define CONDOR_SCRATCH_DIR "_CONDOR_SCRATCH_DIR"
 
-char * logstr = "lcmaps-condor-update";
+static const char * logstr = "lcmaps-condor-update";
 
 // ClassAd attributes we'll use for the update
 #define CLASSAD_GLEXEC_DN "glexec_x509userproxysubject"
@@ -35,24 +38,42 @@ char * logstr = "lcmaps-condor-update";
 
 #define TIME_BUFFER_SIZE 12
 
-int update_starter_child(const char * attr, const char *val, int fd) {
+int update_starter_child(const char * attr, const char *val, int fd, const char * scratch_dir) {
   size_t len;
-  char *environ_tmp = NULL;
   int result = 1;
   char result_buf[TIME_BUFFER_SIZE];
+  uid_t uid;
+  gid_t gid;
 
-  char *current_scratch = getenv(CONDOR_SCRATCH_DIR);
-  if (current_scratch) {
-    lcmaps_log_debug(2, "%s: Using _CONDOR_SCRATCH_DIR=%s\n", logstr, current_scratch);
-    len = strlen(CONDOR_SCRATCH_DIR) + 1 + strlen(current_scratch) + 1;
-    if ((environ_tmp=(char *)malloc(len)) == NULL) {
-      lcmaps_log(0, "%s: Unable to malloc memory for environment entry in child.\n", logstr);
-      goto condor_update_fail_child;
-    }
-    if (snprintf(environ_tmp, len, "%s=%s", CONDOR_SCRATCH_DIR, current_scratch) >= len) {
-      lcmaps_log(0, "%s: Buffer overflow (len=%d) when constructing environment entry.\n", logstr, len);
-      goto condor_update_fail_child;
-    }
+  if (get_user_ids(&uid, &gid, NULL)) {
+    lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
+    goto condor_update_fail_child;
+  }
+  if (setgid(gid) == -1) {
+    lcmaps_log(0, "%s: Unable to switch to user's GID (%d): %d %s\n", logstr, gid, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  }
+  if (setuid(uid) == -1) {
+    lcmaps_log(0, "%s: Unable to switch to user's UID (%d): %d %s\n", logstr, uid, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  }
+
+  char path[PATH_MAX];
+  if (snprintf(path, PATH_MAX, "%s/chirp.config", scratch_dir) >= PATH_MAX) {
+    lcmaps_log(0, "%s: Overly long scratch dir: %s\n", logstr, scratch_dir);
+    goto condor_update_fail_child;
+  }
+
+  if (access(path, O_RDONLY) == -1) {
+    lcmaps_log(0, "%s: Unable to access chirp config %s\n", logstr, path);
+    goto condor_update_fail_child;
+  }
+  char environ_tmp[PATH_MAX];
+  if (snprintf(environ_tmp, PATH_MAX, "_CONDOR_SCRATCH_DIR=%s", scratch_dir) >= PATH_MAX) {
+    lcmaps_log(0, "%s: Overly long scratch dir: %s\n", logstr, scratch_dir);
+    goto condor_update_fail_child;
   }
   char * environ[2] = {environ_tmp, NULL};
 
@@ -102,9 +123,41 @@ int update_starter_child(const char * attr, const char *val, int fd) {
 condor_update_fail_child:
   len = snprintf(result_buf, TIME_BUFFER_SIZE, "%d", result);
   write(fd, result_buf, len);
-  if (environ_tmp)
-    free(environ_tmp); // Considering the next line, this might be the most useless free ever.
   _exit(result);
+}
+
+int get_user_ids(uid_t *uid, gid_t *gid, char ** username) {
+  int count = 0;
+  uid_t internal_uid;
+  gid_t internal_gid;
+  struct passwd *user_info;
+  if (!uid)
+    uid = &internal_uid;
+  uid_t *uid_array;
+  lcmaps_log_debug(2, "%s: Acquiring the UID from LCMAPS\n", logstr);
+  uid_array = (uid_t *)getCredentialData(UID, &count);
+  if (count != 1) {
+    lcmaps_log(0, "%s: No UID set yet; must map to a UID before running the process tracking module.\n", logstr);
+    return 1;
+  }
+  *uid = uid_array[0];
+  if ((user_info = getpwuid(*uid)) == NULL) {
+    lcmaps_log(0, "%s: Fatal error: unable to find corresponding username for UID %d.\n", logstr, uid);
+    return 1;
+  }
+  if (username)
+    *username = user_info->pw_name;
+
+  if (!gid)
+    return 0;
+
+  gid_t *gid_array = (gid_t *)getCredentialData(PRI_GID, &count);
+  if (count <= 0) {
+      *gid = user_info->pw_gid;
+  } else {
+      *gid = gid_array[0];
+  }
+  return 0;
 }
 
 int update_starter(const char * attr, const char * val) {
@@ -113,38 +166,59 @@ int update_starter(const char * attr, const char * val) {
   int rc, exit_code;
   int status;
   int p2c[2];
+  int result = 0;
   FILE * fh;
+
+  uid_t uid;
+  gid_t gid;
+
+  if (get_user_ids(&uid, &gid, NULL)) {
+    lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
+    return 1;
+  }
+
+  char * scratch_dir = findCondorScratch(getpid());
+  if (!scratch_dir) {
+    lcmaps_log(0, "%s: Environment error - unable to determine the starter's scratch directory\n", logstr);
+    return 1;
+  }
 
   if (attr == NULL) {
     lcmaps_log(0, "%s: Internal error - passed a NULL attribute\n", attr);
-    return 1;
+    result = 1;
+    goto finalize;
   }
   if (val == NULL) {
     lcmaps_log(0, "%s: Internal error - passed a NULL value\n", attr);
-    return 1;
+    result = 1;
+    goto finalize;
   }
 
   if (pipe(p2c) < 0) {
     lcmaps_log(0, "%s: Failed to create an internal pipe: %d %s\n", logstr, errno, strerror(errno));
-    return errno;
+    result = errno;
+    goto finalize;
   }
   if ((fd_flags = fcntl(p2c[1], F_GETFD, NULL)) == -1) {
     lcmaps_log(0, "%s: Failed to get fd flags: %d %s\n", logstr, errno, strerror(errno));
-    return errno;
+    result = errno;
+    goto finalize;
   }
   if (fcntl(p2c[1], F_SETFD, fd_flags | FD_CLOEXEC) == -1) {
     lcmaps_log(0, "%s: Failed to set new fd flags: %d %s\n", logstr, errno, strerror(errno));
-    return errno;
+    result = errno;
+    goto finalize;
   }
 
   fork_pid = fork();
   if (fork_pid == -1) {
     lcmaps_log(0, "%s: Failed to fork a new child process: %d %s\n", logstr, errno, strerror(errno));
     close(p2c[0]); close(p2c[1]);
-    return errno;
+    result = errno;
+    goto finalize;
   } else if (fork_pid == 0) { // Child
     close(p2c[0]);
-    update_starter_child(attr, val, p2c[1]);
+    update_starter_child(attr, val, p2c[1], scratch_dir);
     // Does not return.  Just in case:
     _exit(1);
   }
@@ -153,7 +227,8 @@ int update_starter(const char * attr, const char * val) {
   if ((fh = fdopen(p2c[0], "r")) == NULL) {
     lcmaps_log(0, "%s: Failed to reopen file descriptor as file handle: %d %s", logstr, errno, strerror(errno));
     close(p2c[0]);
-    return errno;
+    result = errno;
+    goto finalize;
   }
   rc = fscanf(fh, "%d", &exit_code);
   close(p2c[0]);
@@ -168,19 +243,25 @@ int update_starter(const char * attr, const char * val) {
     if (WIFEXITED(status)) {
       if (!(exit_code = WEXITSTATUS(status))) {
         lcmaps_log(2, "%s: ClassAd update %s=%s successful\n", logstr, attr, val);
-        return 0;
+        result = 0;
       } else {
         lcmaps_log(0, "%s: ClassAd update %s=%s failed.\n", logstr, attr, val);
-        return 1;
+        result = 1;
       }
     } else {
       lcmaps_log(0, "%s: Unrecognized condor_chirp status: %d\n", logstr, status);
-      return 1;
+      result = 1;
     }
   } else {
     lcmaps_log(0, "%s: Update of %s returned error before exec: %d\n", logstr, attr, exit_code);
-    return 1;
+    result = 1;
   }
+
+finalize:
+
+  free(scratch_dir);
+  return result;
+
 }
 
 
@@ -245,8 +326,8 @@ Returns:
 ******************************************************************************/
 int plugin_run(int argc, lcmaps_argument_t *argv)
 {
-  int uid_count;
-  uid_t uid, *uid_array;
+  uid_t uid;
+  char * username;
   struct passwd *user_info;
   char **dn_array, *dn;
   char time_string[TIME_BUFFER_SIZE];
@@ -254,20 +335,7 @@ int plugin_run(int argc, lcmaps_argument_t *argv)
   size_t len;
 
   // Update the user name.
-  uid_count = 0;
-  uid_array;
-  lcmaps_log_debug(2, "%s: Acquiring the username from LCMAPS\n", logstr);
-  uid_array = (uid_t *)getCredentialData(UID, &uid_count);
-  if (uid_count != 1) {
-    lcmaps_log(0, "%s: No UID set yet; must map to a UID before running the process tracking module.\n", logstr);
-    goto condor_update_failure;
-  }
-  uid = uid_array[0];
-  if ((user_info = getpwuid(uid)) == NULL) {
-    lcmaps_log(0, "%s: Fatal error: unable to find corresponding username for UID %d.\n", logstr, uid);
-    goto condor_update_failure;
-  }
-  char *username = user_info->pw_name;
+  get_user_ids(&uid, NULL, &username);
   size_t username_len = strlen(username);
   char * quoted_username = (char *)malloc(username_len + 2 + 1);
   if (quoted_username == NULL) {
