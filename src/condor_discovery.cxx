@@ -15,11 +15,18 @@
 #include <stdio.h>
 #include <iostream>
 
+extern "C" {
 #include "lcmaps/lcmaps_log.h"
+}
+
 #include "condor_discovery.h"
 
 #define PROC "/proc"
 static const char * logstr = "condor_discovery";
+
+// Global variable
+class CondorAncestry;
+CondorAncestry *gCA;
 
 struct eqpid {
     bool operator()(const pid_t pid1, const pid_t pid2) const {
@@ -120,17 +127,17 @@ finalize:
 static char * get_environ(pid_t pid, const char * attr) {
     char path[PATH_MAX];
     if (snprintf(path, sizeof(path), "/proc/%d/environ", pid) >= PATH_MAX) {
-        //lcmaps_log(0, "%s: Failure in building environ path for %d.\n", logstr, pid);
+        lcmaps_log(0, "%s: Failure in building environ path for %d.\n", logstr, pid);
         return NULL;
     }
     int fd;
     if ((fd = open(path, O_RDONLY)) == -1) {
-        //lcmaps_log(0, "%s: Unable to open environ file %s: %d %s\n", logstr, path, errno, strerror(errno));
+        lcmaps_log(0, "%s: Unable to open environ file %s: %d %s\n", logstr, path, errno, strerror(errno));
         return NULL;
     }
     FILE * fp;
     if ((fp = fdopen(fd, "r")) == NULL) {
-        //lcmaps_log(0, "%s: Unable to reopen the environment fd: %d %s\n", logstr, errno, strerror(errno));
+        lcmaps_log(0, "%s: Unable to reopen the environment fd: %d %s\n", logstr, errno, strerror(errno));
         return NULL;
     }
     char *line = (char *)malloc(ENV_MAX+1);
@@ -161,6 +168,7 @@ public:
     char * findCondorScratch(pid_t); // Note: Caller takes ownership of returned pointer on heap.
     int makeAncestry(pid_t, PidList&);
     int mineProc();
+    int getParentIDs(pid_t, uid_t*, gid_t*);
 
 private:
     PidPidMap reverse_parentage_mapping;
@@ -173,7 +181,7 @@ int CondorAncestry::mineProc() {
     struct dirent64 *dp;
     const char * name;
     if ((dirp = opendir(PROC)) == NULL) {
-        //lcmaps_log(0, "%s: Error - Unable to open /proc: %d %s\n", logstr, errno, strerror(errno));
+        lcmaps_log(0, "%s: Error - Unable to open /proc: %d %s\n", logstr, errno, strerror(errno));
         return errno;
     }
     int dfd = dirfd(dirp);
@@ -190,18 +198,18 @@ int CondorAncestry::mineProc() {
                 continue;
             char path[PATH_MAX];
             if (snprintf(path, sizeof(path), "%s/status", name) >= PATH_MAX) {
-                //lcmaps_log(0, "%s: Error - overly long directory file name: %s %d\n", logstr, name, strlen(name));
+                lcmaps_log(0, "%s: Error - overly long directory file name: %s %d\n", logstr, name, strlen(name));
                 continue;
             }
             int fd = openat(dfd, path, O_RDONLY);
             if (fd == -1) {
-                //lcmaps_log(0, "%s: Error - unable to open PID %s status file: %d %s\n", logstr, name, errno, strerror(errno));
+                lcmaps_log(0, "%s: Error - unable to open PID %s status file: %d %s\n", logstr, name, errno, strerror(errno));
                 continue;
             }
             int uid, gid, result;
             pid_t ppid;
             if ((result = get_proc_info(fd, &uid, &gid, &ppid))) {
-                //lcmaps_log(0, "%s: Error - unable to parse status file for PID %s: %d\n", logstr, name, result);
+                lcmaps_log(0, "%s: Error - unable to parse status file for PID %s: %d\n", logstr, name, result);
                 close(fd);
                 continue;
             }
@@ -214,7 +222,7 @@ int CondorAncestry::mineProc() {
     } while (dp != NULL);
 
     if (errno != 0) {
-        //lcmaps_log(0, "Error reading /proc directory: %d %s\n", logstr, errno, strerror(errno));
+        lcmaps_log(0, "Error reading /proc directory: %d %s\n", logstr, errno, strerror(errno));
     }
     closedir(dirp);
 
@@ -250,12 +258,12 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
     PidList ancestry;
     int rc;
     if ((rc = makeAncestry(pid, ancestry))) {
-        //lcmaps_log(0, "%s: Error: unable to determine ancestry of %d: %d\n", logstr, pid, rc);
+        lcmaps_log(0, "%s: Error: unable to determine ancestry of %d: %d\n", logstr, pid, rc);
         return NULL;
     }
 
     if (ancestry.size() < 5) { // pid, starter, startd, master, init are required!
-        //lcmaps_log(0, "%s: Error - ancestry of %d is implausibly small.\n", logstr, pid);
+        lcmaps_log(0, "%s: Error - ancestry of %d is implausibly small.\n", logstr, pid);
         return NULL;
     }
     PidList::const_iterator it;
@@ -265,19 +273,19 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
     it++; // skip the glexec invocation.
     for (; it != ancestry.end(); it++) {
         if ((it2 = process_uid_mapping.find(*it)) == process_uid_mapping.end()) {
-            //lcmaps_log(0, "%s: Error - ancestor %d is not in UID map.\n", logstr, *it);
+            lcmaps_log(0, "%s: Error - ancestor %d is not in UID map.\n", logstr, *it);
             return NULL; // If we don't know the UID of an ancestor, something fishy is happening.  Bail.
         }
         int uid = it2->second;
         if (uid == 0) { // Welcome to your starter!
             char * execute_dir = get_environ(*it, "_CONDOR_EXECUTE");
             if (!execute_dir) {
-                //lcmaps_log(0, "%s: Error - unable to find _CONDOR_EXECUTE from starter %d environment\n", logstr, *it);
+                lcmaps_log(0, "%s: Error - unable to find _CONDOR_EXECUTE from starter %d environment\n", logstr, *it);
                 return NULL;
             }
             char scratch_dir[PATH_MAX];
             if (snprintf(scratch_dir, PATH_MAX, "%s/dir_%d", execute_dir, *it) >= PATH_MAX) {
-                //lcmaps_log(0, "%s: Error - execute path is too long: %s\n", logstr, execute_dir);
+                lcmaps_log(0, "%s: Error - execute path is too long: %s\n", logstr, execute_dir);
                 return NULL;
             }
             char *my_scratch_dir = (char *)malloc(strlen(scratch_dir)+1);
@@ -286,11 +294,73 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
             return my_scratch_dir;
         }
     }
-    //lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.");
+    lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.");
     return NULL;
 }
 
-/*
+int CondorAncestry::getParentIDs(pid_t pid, uid_t *uid, gid_t *gid) {
+    // We need to re-read the process's PPID first.
+    // Why?  In case if the process's parent exited, and some
+    // other process has replaced it (with a different UID).
+    // If the process's PPID has changed, then we return -1.
+
+    // Make sure uid and gid are valid pointers
+    uid_t internal_uid;
+    gid_t internal_gid;
+    if (!uid) {
+        uid = &internal_uid;
+    }
+    if (!gid) {
+        gid = &internal_gid;
+    }
+
+    PidPidMap::const_iterator it;
+    PidIntMap::const_iterator it2;
+    pid_t old_ppid, new_ppid;
+    int result, fd;
+    char path[PATH_MAX];
+
+    if ((it = reverse_parentage_mapping.find(pid)) == reverse_parentage_mapping.end()) {
+        lcmaps_log(0, "%s: Error - Unknown PPID of %d", logstr, pid);
+        return -1;
+    }
+    old_ppid = it->second;
+
+    if (snprintf(path, PATH_MAX, "/proc/%d/status", pid) >= PATH_MAX) {
+        lcmaps_log(0, "%s: Error - overly long PID: %d\n", logstr, pid);
+        return -1;
+    }
+    if ((fd = open(path, O_RDONLY)) == -1) {
+        lcmaps_log(0, "%s: Error opening process %d status file: %d %s\n", logstr, pid, errno, strerror(errno));
+        return -1;
+    }
+    if ((result = get_proc_info(fd, (int *)uid, (int *)gid, &new_ppid))) {
+        lcmaps_log(0, "%s: Error - unable to parse status file for PID %d: %d\n", logstr, pid, result);
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    if (new_ppid != old_ppid) {
+        lcmaps_log(0, "%s: Error - parent PID changed.  Possible race attack.  Old %d; new %d\n", logstr, old_ppid, new_ppid);
+        return -1;
+    }
+
+    if ((it2 = process_uid_mapping.find(new_ppid)) == process_uid_mapping.end()) {
+        lcmaps_log(0, "%s: Error - ancestor of %d is not in UID map.\n", logstr, pid);
+        return -1; // If we don't know the UID of an ancestor, something fishy is happening.  Bail.
+    }
+    *uid = it2->second;
+
+    if ((it2 = process_gid_mapping.find(new_ppid)) == process_gid_mapping.end()) {
+        lcmaps_log(0, "%s: Error - ancestor of %d is not in GID map.\n", logstr, pid);
+        return -1; // If we don't know the UID of an ancestor, something fishy is happening.  Bail.
+    }
+    *gid = it2->second;
+
+    return 0;
+
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         std::cout << "Usage: condor_discovery pid" << std::endl;
@@ -306,7 +376,7 @@ int main(int argc, char *argv[]) {
     PidList ancestry;
     int rc;
     if ((rc = ca.makeAncestry(proc, ancestry))) {
-        //lcmaps_log(0, "%s: Error: unable to determine ancestry of %d: %d\n", logstr, pid, rc);
+        lcmaps_log(0, "%s: Error: unable to determine ancestry of %d: %d\n", logstr, proc, rc);
         return 1;
     }
     PidList::const_iterator it;
@@ -315,13 +385,24 @@ int main(int argc, char *argv[]) {
         std::cout << *it << ", ";
     }
     std::cout << std::endl;
-    std::cout << "Scratch: " << ca.findCondorScratch(proc) << std::endl;
+    //std::cout << "Scratch: " << ca.findCondorScratch(proc) << std::endl;
+    uid_t uid; gid_t gid;
+    ca.getParentIDs(proc, &uid, &gid);
+    std::cout << "Invoking UID: " << uid << std::endl;
 }
-*/
 
 char * findCondorScratch(pid_t proc) {
-    CondorAncestry ca;
-    ca.mineProc();
-    return ca.findCondorScratch(proc);
+    if (!gCA) {
+        gCA = new CondorAncestry;
+        gCA->mineProc();
+    }
+    return gCA->findCondorScratch(proc);
 }
 
+int getParentIDs(pid_t proc, uid_t *uid, gid_t *gid) {
+    if (!gCA) {
+        gCA = new CondorAncestry;
+        gCA->mineProc();
+    }
+    return gCA->getParentIDs(proc, uid, gid);
+}

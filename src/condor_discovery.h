@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 char * findCondorScratch(pid_t);
+int getParentIDs(pid_t, uid_t*, gid_t*);
 
 #ifdef __cplusplus
 }

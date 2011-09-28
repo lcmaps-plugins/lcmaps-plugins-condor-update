@@ -172,7 +172,7 @@ int update_starter(const char * attr, const char * val) {
   uid_t uid;
   gid_t gid;
 
-  if (get_user_ids(&uid, &gid, NULL)) {
+  if (getParentIDs(getpid(), &uid, &gid)) {
     lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
     return 1;
   }
