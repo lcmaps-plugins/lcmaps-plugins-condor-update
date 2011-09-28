@@ -16,7 +16,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <linux/fcntl.h>
+#include <fcntl.h>
 
 #include "lcmaps/lcmaps_modules.h"
 #include "lcmaps/lcmaps_cred_data.h"
@@ -43,13 +43,14 @@ int update_starter_child(const char * attr, const char *val, int fd) {
 
   char *current_scratch = getenv(CONDOR_SCRATCH_DIR);
   if (current_scratch) {
+    lcmaps_log_debug(2, "%s: Using _CONDOR_SCRATCH_DIR=%s\n", logstr, current_scratch);
     len = strlen(CONDOR_SCRATCH_DIR) + 1 + strlen(current_scratch) + 1;
     if ((environ_tmp=(char *)malloc(len)) == NULL) {
       lcmaps_log(0, "%s: Unable to malloc memory for environment entry in child.\n", logstr);
       goto condor_update_fail_child;
     }
-    if (snprintf(environ_tmp, len, "%s=%s", CONDOR_SCRATCH_DIR, environ_tmp) >= len) {
-      lcmaps_log(0, "%s: Buffer overflow when constructing environment entry.\n", logstr);
+    if (snprintf(environ_tmp, len, "%s=%s", CONDOR_SCRATCH_DIR, current_scratch) >= len) {
+      lcmaps_log(0, "%s: Buffer overflow (len=%d) when constructing environment entry.\n", logstr, len);
       goto condor_update_fail_child;
     }
   }
@@ -64,9 +65,39 @@ int update_starter_child(const char * attr, const char *val, int fd) {
                NULL
               };
 
+  // Nuke fd 1 and 2 to prevent condor_chirp from spilling out information to stdout/err
+  // Writing to stdout/err for a successful execution causes condor glexec integration to choke.
+  int fd_null;
+  if ((fd_null = open("/dev/null", O_WRONLY)) == -1) {
+    lcmaps_log(0, "%s: Opening of /dev/null failed: %d %s\n", logstr, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  }
+  if (dup2(fd_null, 1) == -1) {
+    lcmaps_log(0, "%s: Duping of /dev/null to stdout failed: %d %s\n", logstr, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  }
+  if (dup2(fd_null, 2) == -1) {
+    lcmaps_log(0, "%s: Duping of /dev/null to stderr failed: %d %s\n", logstr, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  }
+
+  // Cheap daemonize - causes condor_chirp to attach to init to avoid zombies
+  int fork_pid = fork();
+  if (fork_pid == -1) {
+    lcmaps_log(0, "%s: Daemonization of condor_chirp failed: %d %s\n", logstr, errno, strerror(errno));
+    result = errno;
+    goto condor_update_fail_child;
+  } else if (fork_pid) { // Parent
+    _exit(0);
+  }
+
   if ((result = execve(CONDOR_CHIRP_PATH, argv, environ)) == -1) {
     lcmaps_log(0, "%s: Exec of condor_chirp failed: %d %s\n", errno, strerror(errno));
   }
+  result = errno;
 
 condor_update_fail_child:
   len = snprintf(result_buf, TIME_BUFFER_SIZE, "%d", result);
@@ -101,7 +132,7 @@ int update_starter(const char * attr, const char * val) {
     lcmaps_log(0, "%s: Failed to get fd flags: %d %s\n", logstr, errno, strerror(errno));
     return errno;
   }
-  if (fcntl(p2c[1], F_SETFD, fd_flags | O_CLOEXEC) == -1) {
+  if (fcntl(p2c[1], F_SETFD, fd_flags | FD_CLOEXEC) == -1) {
     lcmaps_log(0, "%s: Failed to set new fd flags: %d %s\n", logstr, errno, strerror(errno));
     return errno;
   }
@@ -129,6 +160,10 @@ int update_starter(const char * attr, const char * val) {
 
   if (rc != 1) {
     // exec succeeded!  Let's check the exit status
+    // Note that we just check to see if condor_chirp daemonized, not whether
+    // it succeeded.  The problem is that the starter will block on us, and
+    // we block on condor_starter, and condor_starter blocks on the single-threaded starter.
+    // See the issue?
     waitpid(fork_pid, &status, 0);
     if (WIFEXITED(status)) {
       if (!(exit_code = WEXITSTATUS(status))) {
@@ -233,8 +268,15 @@ int plugin_run(int argc, lcmaps_argument_t *argv)
     goto condor_update_failure;
   }
   char *username = user_info->pw_name;
+  size_t username_len = strlen(username);
+  char * quoted_username = (char *)malloc(username_len + 2 + 1);
+  if (quoted_username == NULL) {
+    lcmaps_log(0, "%s: Malloc failed for quoted username.\n", logstr);
+    goto condor_update_failure;
+  }
+  snprintf(quoted_username, username_len + 3, "\"%s\"", username);
 
-  update_starter(CLASSAD_GLEXEC_USER, username);
+  update_starter(CLASSAD_GLEXEC_USER, quoted_username);
 
   // Update the DN.
   lcmaps_log_debug(2, "%s: Acquiring information from LCMAPS framework\n", logstr);
@@ -245,8 +287,15 @@ int plugin_run(int argc, lcmaps_argument_t *argv)
   } else {
     lcmaps_log_debug(5, "%s: user_dn = %s\n", logstr, dn);
   }
+  size_t dn_len = strlen(dn);
+  char * quoted_dn = (char *)malloc(dn_len + 2 + 1);
+  if (quoted_dn == NULL) {
+    lcmaps_log(0, "%s: Malloc failed for quoted DN.\n", logstr);
+    goto condor_update_failure;
+  }
+  snprintf(quoted_dn, dn_len + 3, "\"%s\"", dn);
 
-  update_starter(CLASSAD_GLEXEC_DN, dn);
+  update_starter(CLASSAD_GLEXEC_DN, quoted_dn);
 
   // Update the invocation time.
   lcmaps_log_debug(2, "%s: Logging time of invocation\n", logstr);
