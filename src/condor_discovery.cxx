@@ -144,10 +144,11 @@ static char * get_environ(pid_t pid, const char * attr) {
     if (!line) return NULL;
     size_t line_length = ENV_MAX;
     ssize_t bytes_read;
-    size_t attr_len = strlen(attr);
+    size_t attr_len = strlen(attr), bytes_read2;
     char * new_val = NULL;
     while ((bytes_read = getdelim(&line, &line_length, '\0', fp)) > -1) {
-        if (bytes_read < attr_len+2)
+        bytes_read2 = (size_t)bytes_read;
+        if (bytes_read2 < attr_len+2)
             continue;
         line[attr_len] = '\0'; // Null out the equals sign
         if (strcmp(line, attr) != 0)
@@ -225,7 +226,7 @@ int CondorAncestry::mineProc() {
         lcmaps_log(0, "Error reading /proc directory: %d %s\n", logstr, errno, strerror(errno));
     }
     closedir(dirp);
-
+    return 0;
 }
 
 int CondorAncestry::makeAncestry(pid_t pid, PidList& ancestry) {
@@ -268,7 +269,6 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
     }
     PidList::const_iterator it;
     PidIntMap::const_iterator it2;
-    pid_t starter_pid = -1;
     it = ancestry.begin();
     it++; // skip the glexec invocation.
     for (; it != ancestry.end(); it++) {

@@ -38,17 +38,17 @@ static const char * logstr = "lcmaps-condor-update";
 
 #define TIME_BUFFER_SIZE 12
 
-int update_starter_child(const char * attr, const char *val, int fd, const char * scratch_dir) {
+static int update_starter_child(const char * attr, const char *val, int fd, const char * scratch_dir) {
   size_t len;
   int result = 1;
   char result_buf[TIME_BUFFER_SIZE];
   uid_t uid;
   gid_t gid;
 
-  if (get_user_ids(&uid, &gid, NULL)) {
+  if (getParentIDs(getpid(), &uid, &gid)) {
     lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
-    goto condor_update_fail_child;
-  }
+    return 1;
+  } 
   if (setgid(gid) == -1) {
     lcmaps_log(0, "%s: Unable to switch to user's GID (%d): %d %s\n", logstr, gid, errno, strerror(errno));
     result = errno;
@@ -122,14 +122,15 @@ int update_starter_child(const char * attr, const char *val, int fd, const char 
 
 condor_update_fail_child:
   len = snprintf(result_buf, TIME_BUFFER_SIZE, "%d", result);
-  write(fd, result_buf, len);
+  if (write(fd, result_buf, len) == -1) {
+    lcmaps_log(0, "%s: Unable to return failed result to parent: %d %s\n", logstr, errno, strerror(errno));
+  }
   _exit(result);
 }
 
 int get_user_ids(uid_t *uid, gid_t *gid, char ** username) {
   int count = 0;
   uid_t internal_uid;
-  gid_t internal_gid;
   struct passwd *user_info;
   if (!uid)
     uid = &internal_uid;
@@ -168,14 +169,6 @@ int update_starter(const char * attr, const char * val) {
   int p2c[2];
   int result = 0;
   FILE * fh;
-
-  uid_t uid;
-  gid_t gid;
-
-  if (getParentIDs(getpid(), &uid, &gid)) {
-    lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
-    return 1;
-  }
 
   char * scratch_dir = findCondorScratch(getpid());
   if (!scratch_dir) {
@@ -328,7 +321,6 @@ int plugin_run(int argc, lcmaps_argument_t *argv)
 {
   uid_t uid;
   char * username;
-  struct passwd *user_info;
   char **dn_array, *dn;
   char time_string[TIME_BUFFER_SIZE];
   time_t curtime;
