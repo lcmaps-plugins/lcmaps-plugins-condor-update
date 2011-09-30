@@ -57,14 +57,15 @@ static char * match_column(const char* key, const char *buf) {
     } else {
         column_len = next_line - next_col;
     }
-    char * result = (char *)malloc(column_len);
+    char * result = (char *)malloc(column_len+1);
+    result[column_len] = '\0';
     if (!result) return NULL;
     strncpy(result, next_col, column_len);
     return result;
 }
 
 #define buf_size 4096
-static int get_proc_info(int fd, int *uid, int *gid, pid_t *ppid) {
+static int get_proc_info(int fd, int *uid, int *gid, int *ppid) {
     int retval = 0;
     *uid = -1;
     *gid = -1;
@@ -78,6 +79,8 @@ static int get_proc_info(int fd, int *uid, int *gid, pid_t *ppid) {
     }
     buf = buffer;
     cuid = NULL;
+    cgid = NULL;
+    cppid = NULL;
     while (buf != NULL) {
         if (*ppid == -1) {
             cppid = match_column("PPid:", buf);
@@ -141,7 +144,7 @@ static char * get_environ(pid_t pid, const char * attr) {
         return NULL;
     }
     char *line = (char *)malloc(ENV_MAX+1);
-    if (!line) return NULL;
+    if (!line) {fclose(fp); return NULL;}
     size_t line_length = ENV_MAX;
     ssize_t bytes_read;
     size_t attr_len = strlen(attr), bytes_read2;
@@ -155,10 +158,11 @@ static char * get_environ(pid_t pid, const char * attr) {
             continue;
         const char * val = line + attr_len+1;
         new_val = (char *)malloc(strlen(val)+1);
-        if (!new_val) return NULL;
+        if (!new_val) {fclose(fp); return NULL;}
         strcpy(new_val, val);
         break;
     }
+    fclose(fp);
     free(line);
     return new_val;
 }
@@ -216,6 +220,7 @@ int CondorAncestry::mineProc() {
             }
             close(fd);
             //std::cout << "Running process: " << name << " (uid=" << uid << ", gid=" << gid << ", ppid= " << ppid << ")" << std::endl;
+            //lcmaps_log(0, "%s: Running process %s (uid=%d, gid=%d, ppid=%d)\n", name, uid, gid, ppid);
             reverse_parentage_mapping[proc] = ppid;
             process_uid_mapping[proc] = uid;
             process_gid_mapping[proc] = gid;
@@ -223,7 +228,7 @@ int CondorAncestry::mineProc() {
     } while (dp != NULL);
 
     if (errno != 0) {
-        lcmaps_log(0, "Error reading /proc directory: %d %s\n", logstr, errno, strerror(errno));
+        lcmaps_log(0, "%s: Error reading /proc directory: %d %s\n", logstr, errno, strerror(errno));
     }
     closedir(dirp);
     return 0;
@@ -238,6 +243,7 @@ int CondorAncestry::makeAncestry(pid_t pid, PidList& ancestry) {
         ancestry.push_back(curpid);
         if ((it = reverse_parentage_mapping.find(curpid)) == reverse_parentage_mapping.end()) {
             result = 1;
+            lcmaps_log(0, "%s: Unable to find parent of %d, ancestor of %d.\n", logstr, curpid, pid);
             break;
         }
         curpid = it->second;
@@ -288,6 +294,7 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
                 lcmaps_log(0, "%s: Error - execute path is too long: %s\n", logstr, execute_dir);
                 return NULL;
             }
+            free(execute_dir);
             char *my_scratch_dir = (char *)malloc(strlen(scratch_dir)+1);
             if (!my_scratch_dir) return NULL;
             strcpy(my_scratch_dir, scratch_dir);
@@ -385,7 +392,13 @@ int main(int argc, char *argv[]) {
         std::cout << *it << ", ";
     }
     std::cout << std::endl;
-    //std::cout << "Scratch: " << ca.findCondorScratch(proc) << std::endl;
+    char * scratch;
+    if (!(scratch = ca.findCondorScratch(proc))) {
+        std::cout << "Unable to find scratch" << std::endl;
+    } else {
+        std::cout << "Scratch: " << scratch << std::endl;
+        free(scratch);
+    }
     uid_t uid; gid_t gid;
     ca.getParentIDs(proc, &uid, &gid);
     std::cout << "Invoking UID: " << uid << std::endl;

@@ -38,14 +38,14 @@ static const char * logstr = "lcmaps-condor-update";
 
 #define TIME_BUFFER_SIZE 12
 
-static int update_starter_child(const char * attr, const char *val, int fd, const char * scratch_dir) {
+static int update_starter_child(const char * attr, const char *val, int fd, const char * scratch_dir, pid_t ppid) {
   size_t len;
   int result = 1;
   char result_buf[TIME_BUFFER_SIZE];
   uid_t uid;
   gid_t gid;
 
-  if (getParentIDs(getpid(), &uid, &gid)) {
+  if (getParentIDs(ppid, &uid, &gid)) {
     lcmaps_log(0, "%s: Unable to determine target user UID/GID\n", logstr);
     return 1;
   } 
@@ -170,7 +170,9 @@ int update_starter(const char * attr, const char * val) {
   int result = 0;
   FILE * fh;
 
-  char * scratch_dir = findCondorScratch(getpid());
+  pid_t pid = getpid();
+
+  char * scratch_dir = findCondorScratch(pid);
   if (!scratch_dir) {
     lcmaps_log(0, "%s: Environment error - unable to determine the starter's scratch directory\n", logstr);
     return 1;
@@ -211,7 +213,7 @@ int update_starter(const char * attr, const char * val) {
     goto finalize;
   } else if (fork_pid == 0) { // Child
     close(p2c[0]);
-    update_starter_child(attr, val, p2c[1], scratch_dir);
+    update_starter_child(attr, val, p2c[1], scratch_dir, pid);
     // Does not return.  Just in case:
     _exit(1);
   }
