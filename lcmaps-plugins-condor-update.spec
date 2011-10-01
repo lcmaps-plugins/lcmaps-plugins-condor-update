@@ -1,6 +1,6 @@
 Summary: Plugin for updating a Condor ClassAd from LCMAPS authorization framework
 Name: lcmaps-plugins-condor-update
-Version: 0.0.1
+Version: 0.0.2
 Release: 1%{?dist}
 License: Public Domain
 Group: System Environment/Libraries
@@ -49,6 +49,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_libdir}/modules/liblcmaps_condor_update.so.0.0.0
 
 %changelog
+* Fri Sep 30 2011 Brian Bockelman <bbockelm@cse.unl.edu> - 0.0.2-1
+- Fix memory leaks and track the correct PID.
+
 * Fri Sep 23 2011 Brian Bockelman <bbockelm@cse.unl.edu> - 0.0.1-1
 - Initial build of the process tracking plugin.
 
