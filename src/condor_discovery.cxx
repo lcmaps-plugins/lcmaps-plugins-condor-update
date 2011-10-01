@@ -2,7 +2,6 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <ext/hash_map>
 #include <list>
 #include <signal.h>
 #include <pwd.h>
@@ -10,7 +9,13 @@
 #include <syslog.h> 
 #include <errno.h>
 #include <dirent.h>
-    
+
+#ifdef HAVE_UNORDERED_MAP
+#include <unordered_map>
+#else
+#include <ext/hash_map>
+#endif
+
 #include <string.h>
 #include <stdio.h>
 #include <iostream>
@@ -28,14 +33,18 @@ static const char * logstr = "condor_discovery";
 class CondorAncestry;
 CondorAncestry *gCA;
 
+#ifdef HAVE_UNORDERED_MAP
+typedef std::unordered_map<pid_t, pid_t, std::hash<pid_t>, std::equal_to<pid_t> > PidPidMap;
+typedef std::unordered_map<pid_t, int, std::hash<pid_t>, std::equal_to<pid_t> > PidIntMap;
+#else
 struct eqpid {
     bool operator()(const pid_t pid1, const pid_t pid2) const {
         return pid1 == pid2;
     }
 };  
-    
 typedef __gnu_cxx::hash_map<pid_t, pid_t, __gnu_cxx::hash<pid_t>, eqpid> PidPidMap;
 typedef __gnu_cxx::hash_map<pid_t, int, __gnu_cxx::hash<pid_t>, eqpid> PidIntMap;
+#endif
 typedef std::list<pid_t> PidList;
 
 static char * match_column(const char* key, const char *buf) {

@@ -4,8 +4,12 @@
 ##
 #######################################################################
 
-AM_CPPFLAGS = \
-        $(LCMAPS_CFLAGS)
+ACLOCAL_AMFLAGS = -I m4 -I src
+
+AM_CXXFLAGS = \
+	$(LCMAPS_CFLAGS) \
+	-Wno-write-strings \
+	$(CXX0X_CFLAGS)
 
 EXTRA_DIST = bootstrap lcmaps-plugins-condor-update.spec
 
