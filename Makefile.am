@@ -6,8 +6,17 @@
 
 ACLOCAL_AMFLAGS = -I m4 -I src
 
+AM_CFLAGS = \
+	-Werror \
+	-Wall \
+	-Wp,-D_FORTIFY_SOURCE=2 \
+	$(LCMAPS_CFLAGS)
+
 AM_CXXFLAGS = \
 	$(LCMAPS_CFLAGS) \
+	-Werror \
+	-Wall \
+	-Wp,-D_FORTIFY_SOURCE=2 \
 	-Wno-write-strings \
 	$(CXX0X_CFLAGS)
 

@@ -116,7 +116,7 @@ static int update_starter_child(const char * attr, const char *val, int fd, cons
   }
 
   if ((result = execve(CONDOR_CHIRP_PATH, argv, environ)) == -1) {
-    lcmaps_log(0, "%s: Exec of condor_chirp failed: %d %s\n", errno, strerror(errno));
+    lcmaps_log(0, "%s: Exec of condor_chirp failed: %d %s\n", logstr, errno, strerror(errno));
   }
   result = errno;
 
@@ -143,7 +143,7 @@ int get_user_ids(uid_t *uid, gid_t *gid, char ** username) {
   }
   *uid = uid_array[0];
   if ((user_info = getpwuid(*uid)) == NULL) {
-    lcmaps_log(0, "%s: Fatal error: unable to find corresponding username for UID %d.\n", logstr, uid);
+    lcmaps_log(0, "%s: Fatal error: unable to find corresponding username for UID %d.\n", logstr, *uid);
     return 1;
   }
   if (username)
@@ -297,7 +297,7 @@ int plugin_introspect(int *argc, lcmaps_argument_t **argv)
 
   *argv = argList;
   *argc = lcmaps_cntArgs(argList);
-  lcmaps_log_debug(2, "%s: address first argument: 0x%x\n", logstr, argList);
+  lcmaps_log_debug(2, "%s: address first argument: %p\n", logstr, argList);
 
   lcmaps_log_debug(2, "%s: Introspect succeeded\n", logstr);
 

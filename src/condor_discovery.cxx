@@ -213,7 +213,7 @@ int CondorAncestry::mineProc() {
                 continue;
             char path[PATH_MAX];
             if (snprintf(path, sizeof(path), "%s/status", name) >= PATH_MAX) {
-                lcmaps_log(0, "%s: Error - overly long directory file name: %s %d\n", logstr, name, strlen(name));
+                lcmaps_log(0, "%s: Error - overly long directory file name: %s %ld\n", logstr, name, strlen(name));
                 continue;
             }
             int fd = openat(dfd, path, O_RDONLY);
@@ -311,7 +311,7 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
             return my_scratch_dir;
         }
     }
-    lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.");
+    lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.", logstr);
     return NULL;
 }
 
