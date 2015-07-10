@@ -16,6 +16,7 @@
 #include <ext/hash_map>
 #endif
 
+#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 #include <iostream>
