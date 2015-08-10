@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <linux/limits.h>
 
@@ -61,9 +62,32 @@ static int update_starter_child(const char * attr, const char *val, int fd, cons
   }
 
   char path[PATH_MAX];
-  if (snprintf(path, PATH_MAX, "%s/chirp.config", scratch_dir) >= PATH_MAX) {
+  struct stat chirp_file;
+  if (stat(scratch_dir, &chirp_file) == -1)
+  {
+    lcmaps_log(0, "%s: Scratch location %s not found (errno=%d, %s).\n", logstr, scratch_dir, errno, strerror(errno));
+    goto condor_update_fail_child;
+  }
+  if (S_ISREG(chirp_file.st_mode))
+  {
+    if (snprintf(path, PATH_MAX, "%s", scratch_dir) >= PATH_MAX)
+    {
+      lcmaps_log(0, "%s: Chirp config filename overly long.\n", logstr);
+      goto condor_update_fail_child;
+    }
+  }
+  else if (snprintf(path, PATH_MAX, "%s/chirp.config", scratch_dir) >= PATH_MAX)
+  {
     lcmaps_log(0, "%s: Overly long scratch dir: %s\n", logstr, scratch_dir);
     goto condor_update_fail_child;
+  }
+  else if (stat(path, &chirp_file) == -1)
+  {
+    if (snprintf(path, PATH_MAX, "%s/.chirp.config", scratch_dir) >= PATH_MAX)
+    {
+      lcmaps_log(0, "%s: Overly long scratch dir: %s\n", logstr, scratch_dir);
+      goto condor_update_fail_child;
+    }
   }
 
   if (access(path, O_RDONLY) == -1) {
