@@ -277,8 +277,9 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
         return NULL;
     }
 
-    if (ancestry.size() < 5) { // pid, starter, startd, master, init are required!
-        lcmaps_log(0, "%s: Error - ancestry of %d is implausibly small.\n", logstr, pid);
+    if (ancestry.size() < 2) { // pid, starter, startd, master, init are required!
+        // For PID namespaces, this might just be PID, namespace_starter.
+        lcmaps_log(0, "%s: Error - ancestry of %d is implausibly small (found chain of length %lu).\n", logstr, pid, ancestry.size());
         return NULL;
     }
     PidList::const_iterator it;
@@ -291,11 +292,16 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
             return NULL; // If we don't know the UID of an ancestor, something fishy is happening.  Bail.
         }
         int uid = it2->second;
-        if (uid == 0) { // Welcome to your starter!
-            char * execute_dir = get_environ(*it, "_CONDOR_EXECUTE");
+        if ((uid == 0) || (*it == 1)) { // Welcome to your starter!
+            char * execute_dir = (uid == 0) ? get_environ(*it, "_CONDOR_EXECUTE") : get_environ(*it, "_CONDOR_CHIRP_CONFIG");
             if (!execute_dir) {
-                lcmaps_log(0, "%s: Error - unable to find _CONDOR_EXECUTE from starter %d environment\n", logstr, *it);
+                if (uid == 0) {lcmaps_log(0, "%s: Error - unable to find _CONDOR_EXECUTE from starter %d environment\n", logstr, *it);}
+                else {lcmaps_log(0, "%s: Error - unable to find _CONDOR_CHIRP_CONFIG from starter %d environment.\n", logstr, *it);}
                 return NULL;
+            }
+            if (uid != 0)
+            {
+                return execute_dir;
             }
             char scratch_dir[PATH_MAX];
             if (snprintf(scratch_dir, PATH_MAX, "%s/dir_%d", execute_dir, *it) >= PATH_MAX) {
@@ -309,7 +315,7 @@ char * CondorAncestry::findCondorScratch(pid_t pid) {
             return my_scratch_dir;
         }
     }
-    lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.", logstr);
+    lcmaps_log(0, "%s: Error - _CONDOR_EXECUTE missing from ancestors.\n", logstr);
     return NULL;
 }
 
