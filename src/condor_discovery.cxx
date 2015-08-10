@@ -209,8 +209,6 @@ int CondorAncestry::mineProc() {
             name = dp->d_name;
             if (sscanf(name, "%d", &proc) != 1)
                 continue;
-            if (proc < 2)
-                continue;
             char path[PATH_MAX];
             if (snprintf(path, sizeof(path), "%s/status", name) >= PATH_MAX) {
                 lcmaps_log(0, "%s: Error - overly long directory file name: %s %ld\n", logstr, name, strlen(name));
