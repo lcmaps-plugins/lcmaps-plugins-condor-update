@@ -1,6 +1,6 @@
 Summary: Plugin for updating a Condor ClassAd from LCMAPS authorization framework
 Name: lcmaps-plugins-condor-update
-Version: 0.2.0
+Version: 0.2.1
 Release: 1%{?dist}
 License: Public Domain
 Group: System Environment/Libraries
@@ -44,6 +44,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_libdir}/lcmaps/lcmaps_condor_update.mod
 
 %changelog
+* Wed Aug 12 2015 Brian Bockelman <bbockelm@cse.unl.edu> - 0.2.1-1
+- Fix usage of _CONDOR_CHIRP_CONFIG environment variable.
+
 * Mon Aug 10 2015 Brian Bockelman <bbockelm@cse.unl.edu> - 0.2.0-1
 - Fix support for PID namespaces.
 
