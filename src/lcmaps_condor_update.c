@@ -61,6 +61,7 @@ static int update_starter_child(const char * attr, const char *val, int fd, cons
     goto condor_update_fail_child;
   }
 
+  int use_chirp_config = 0;
   char path[PATH_MAX];
   struct stat chirp_file;
   if (stat(scratch_dir, &chirp_file) == -1)
@@ -75,6 +76,7 @@ static int update_starter_child(const char * attr, const char *val, int fd, cons
       lcmaps_log(0, "%s: Chirp config filename overly long.\n", logstr);
       goto condor_update_fail_child;
     }
+    use_chirp_config = 1;
   }
   else if (snprintf(path, PATH_MAX, "%s/chirp.config", scratch_dir) >= PATH_MAX)
   {
@@ -95,7 +97,15 @@ static int update_starter_child(const char * attr, const char *val, int fd, cons
     goto condor_update_fail_child;
   }
   char environ_tmp[PATH_MAX];
-  if (snprintf(environ_tmp, PATH_MAX, "_CONDOR_SCRATCH_DIR=%s", scratch_dir) >= PATH_MAX) {
+  if (use_chirp_config)
+  {
+    if (snprintf(environ_tmp, PATH_MAX, "_CONDOR_CHIRP_CONFIG=%s", scratch_dir) >= PATH_MAX)
+    {
+      lcmaps_log(0, "%s: Overly long chirp config path: %s\n", logstr, scratch_dir);
+      goto condor_update_fail_child;
+    }
+  }
+  else if (snprintf(environ_tmp, PATH_MAX, "_CONDOR_SCRATCH_DIR=%s", scratch_dir) >= PATH_MAX) {
     lcmaps_log(0, "%s: Overly long scratch dir: %s\n", logstr, scratch_dir);
     goto condor_update_fail_child;
   }
